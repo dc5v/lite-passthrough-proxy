@@ -1,0 +1,9 @@
+.vscode/*
+build/*
+.clang-format
+test/*
+*.obj
+*.bin
+*.bak
+*.txt
+main.cpp

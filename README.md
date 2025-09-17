@@ -63,3 +63,4 @@ sequenceDiagram
   PASSTHOUGH->>CLIENT: Response
   Note over PASSTHOUGH: Session Timeout
 ```
+
