@@ -1,0 +1,45 @@
+routes:
+  - protocol: tcp
+    port: 8080
+    dest_host: "dns.domain.com"
+    dest_port: 80
+
+  - protocol: udp
+    port: 53
+    dest_host: "dns.domain2.com"
+    preserve_ip: true
+
+  - protocol: tcp
+    port_range:
+      from: 9000
+      to: 9010
+    dest_host: "game.domain.com"
+
+  - protocol: tcp
+    port: 443
+    dest_host: "webserver.internal"
+    dest_port: 8443
+    preserve_ip: true
+
+options:
+  worker_threads: 8   
+  connection:
+    idle_timeout: 300000
+    connect_timeout: 10000
+    shutdown_timeout: 60000
+  log_level: "info"  
+
+security:
+  tcp:
+    connection_limits: 50000
+    connection_ip_limits: 500
+  udp:
+    connection_limits: 25000
+    pps_ip_limits: 5000
+    bps_ip_limits: 5242880
+
+performance:
+  cpu_affinity: [0, 1, 2, 3]
+  kernel_socket:
+    recv_buffer_size: 1048576
+    send_buffer_size: 1048576
