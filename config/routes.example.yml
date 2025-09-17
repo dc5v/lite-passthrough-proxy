@@ -1,25 +1,22 @@
 routes:
-  - protocol: tcp
-    port: 8080
-    dest_host: "dns.domain.com"
+  - port: 8080
+    dest_host: "dns1.domain.com"
     dest_port: 80
 
-  - protocol: udp
-    port: 53
-    dest_host: "dns.domain2.com"
-    preserve_ip: true
-
-  - protocol: tcp
-    port_range:
+  - port_range:
       from: 9000
       to: 9010
-    dest_host: "game.domain.com"
+    dest_host: "dns2.domain.com"
+    dest_port_range:
+      from: 8000
+      to: 8010
 
-  - protocol: tcp
-    port: 443
-    dest_host: "webserver.internal"
-    dest_port: 8443
-    preserve_ip: true
+  - port_range:
+      from: 9000
+      to: 9010
+    dest_host: "dnf3.domain.com"
+    dest_port_range:
+      from: 8000  
 
 options:
   worker_threads: 8   
