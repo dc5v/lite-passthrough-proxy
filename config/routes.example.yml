@@ -1,3 +1,5 @@
+# proxy route 예제입니다 ㅎㅎ
+
 routes:
   - port: 8080
     dest_host: "dns1.domain.com"
