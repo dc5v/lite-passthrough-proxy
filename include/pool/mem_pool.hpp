@@ -10,22 +10,25 @@ using namespace std;
 
 namespace lite_through_proxy
 {
-  template <size_t BlockSize = 65536, size_t PoolSize = 1024>
-  class alignas( 64 ) MemPool
+  // Cache optimize - using alignas( 64 )
+  // @see `cat /sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size`
+
+  template <size_t BLOCK_SIZE = 65536, size_t POOL_SIZE = 1024> class alignas( 64 ) MemPool
   {
   private:
     static_assert( has_single_bit( PoolSize ), "PoolSize must be ^2" );
     static_assert( BlockSize % 64 == 0, "BlockSize must be ^64" );
 
+
     struct alignas( 64 ) Block
     {
-      alignas( 64 ) byte data[BlockSize];
-      atomic<uint64_t> epoch{ 0 }; // uint32_t -> uint64_t
+      alignas( 64 ) byte data[BLOCK_SIZE];
+      atomic<uint64_t> epoch{ 0 }; // fixed uint32_t -> uint64_t 엠병 오버플로날뻔 🫩
       atomic<bool> in_use{ false };
     };
 
     alignas( 64 ) array<Block, PoolSize> m_pool;
-    alignas( 64 ) atomic<uint64_t> m_free_bitmap[PoolSize / 64];
+    alignas( 64 ) atomic<uint64_t> m_free_bitmap[POOL_SIZE / 64];
     alignas( 64 ) atomic<uint64_t> m_alloc_counter{ 0 };
 
   public:
@@ -40,11 +43,11 @@ namespace lite_through_proxy
     [[nodiscard]] span<byte> acquire() noexcept
     {
       const uint64_t ticket = m_alloc_counter.fetch_add( 1, memory_order_relaxed );
-      const size_t start = ticket & ( PoolSize - 1 );
+      const size_t start = ticket & ( POOL_SIZE - 1 );
 
-      for ( size_t attempts = 0; attempts < PoolSize; ++attempts )
+      for ( size_t attempts = 0; attempts < POOL_SIZE; ++attempts )
       {
-        const size_t i = ( start + attempts ) & ( PoolSize - 1 );
+        const size_t i = ( start + attempts ) & ( POOL_SIZE - 1 );
         const size_t idx = i / 64;
         const uint64_t mask = 1ULL << ( i % 64 );
 
@@ -58,7 +61,7 @@ namespace lite_through_proxy
             block.in_use.store( true, memory_order_release );
             block.epoch.fetch_add( 1, memory_order_acq_rel );
 
-            return { block.data, BlockSize };
+            return { block.data, BLOCK_SIZE };
           }
         }
       }
@@ -75,14 +78,14 @@ namespace lite_through_proxy
 
       const auto *ptr = block.data();
       const size_t offset = ptr - reinterpret_cast<byte *>( &m_pool[0] );
-      const size_t idx = offset / sizeof( Block );
+      const size_t i = offset / sizeof( Block );
 
-      if ( idx >= PoolSize ) // Check pool size range
+      if ( i >= POOL_SIZE ) // Check pool size range
       {
         return;
       }
 
-      auto &target_block = m_pool[idx];
+      auto &target_block = m_pool[i];
       bool expected = true;
 
       // Check duplicate free exception
@@ -91,8 +94,8 @@ namespace lite_through_proxy
         return;
       }
 
-      const size_t bitmap_idx = idx / 64;
-      const uint64_t bit = 1ULL << ( idx % 64 );
+      const size_t bitmap_idx = i / 64;
+      const uint64_t bit = 1ULL << ( i % 64 );
 
       // bitmap update
       atomic_thread_fence( memory_order_release );
@@ -101,7 +104,7 @@ namespace lite_through_proxy
 
     bool is_valid_block( span<byte> block ) const noexcept
     {
-      if ( block.empty() || block.size() != BlockSize )
+      if ( block.empty() || block.size() != BLOCK_SIZE )
       {
         return false;
       }
@@ -110,7 +113,7 @@ namespace lite_through_proxy
       const size_t offset = ptr - reinterpret_cast<const byte *>( &m_pool[0] );
       const size_t idx = offset / sizeof( Block );
 
-      return idx < PoolSize && reinterpret_cast<const byte *>( &m_pool[idx].data[0] ) == ptr;
+      return idx < POOL_SIZE && reinterpret_cast<const byte *>( &m_pool[idx].data[0] ) == ptr;
     }
   };
 
