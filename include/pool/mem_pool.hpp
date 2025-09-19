@@ -8,11 +8,13 @@
 
 using namespace std;
 
-namespace lite_through_proxy
+namespace lite_passthrough_proxy
 {
-  // Cache optimize - using alignas( 64 )
-  // @see `cat /sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size`
-
+  /**
+   * Cache optimize - using alignas( 64 )
+   * @see `cat /sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size`
+   *
+   */
   template <size_t BLOCK_SIZE = 65536, size_t POOL_SIZE = 1024> class alignas( 64 ) MemPool
   {
   private:
@@ -80,7 +82,7 @@ namespace lite_through_proxy
       const size_t offset = ptr - reinterpret_cast<byte *>( &m_pool[0] );
       const size_t i = offset / sizeof( Block );
 
-      if ( i >= POOL_SIZE ) // Check pool size range
+      if ( i >= POOL_SIZE )
       {
         return;
       }
@@ -119,4 +121,4 @@ namespace lite_through_proxy
 
   thread_local inline MemPool<> packet_pool;
 
-} // namespace lite_through_proxy
+} // namespace lite_passthrough_proxy
