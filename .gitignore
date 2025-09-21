@@ -7,3 +7,4 @@ test/*
 *.bak
 *.txt
 main.cpp
+.deprecated/*

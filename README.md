@@ -1,6 +1,6 @@
 # Lite `Pass-through` Proxy Server 
 
-이 프로젝트는 C++20으로 작성된 Pass-through 프록시 서버입니다. 저사양 서버에서 작동하기 위해 최대한 경량형 운영에 초점을 두고 작성했습니다.
+이 프로젝트는 ++C20으로 작성된 Pass-through 프록시 서버입니다. 저사양 서버에서 작동하기 위해 최대한 경량형 운영에 초점을 두고 작성했습니다.
 
 
 ## What is this?
@@ -19,7 +19,7 @@ tcp, udp를 모두 지원하며 저사양 서버에서 아주가볍게 작동하
 - CPU: Intel Xeon E5-2680v4 x 2
 - RAM: 2GB 
 - Linux kernel 5.4+
-- GCC 11+ or Clang 14+ (C++20)
+- GCC 11+ or Clang 14+ (++C20)
 - CMake 3.20+
 
 ---
