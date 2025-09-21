@@ -20,8 +20,21 @@ using namespace std;
  * 시간: milliseconds
  * 버퍼: bytes
  */
-namespace lite_through_proxy
+namespace lite_passthrough_proxy
 {
+  /**
+   * RFC-1035
+   * @link https://www.rfc-editor.org/rfc/rfc1035.html
+   *
+   */
+  static const regex REGEXP_IPv4{ R"(^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$)" };
+  static const regex REGEXP_IPv6{ R"(^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|^::1$|^::$|^([0-9a-fA-F]{1,4}:)*::([0-9a-fA-F]{1,4}:)*[0-9a-fA-F]{1,4}$)" };
+  static const regex REGEXP_DOMAIN{ R"(^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$)" };
+
+  /**
+   * ## Route
+   *
+   */
   struct Route
   {
     string protocol{ "tcp" };
@@ -40,6 +53,10 @@ namespace lite_through_proxy
     vector<sockaddr_storage> resolved_addrs;
   };
 
+  /**
+   * ## Options structs
+   *
+   */
   struct OptionConnection
   {
     uint32_t idle_timeout{ 60000 };
@@ -51,22 +68,26 @@ namespace lite_through_proxy
   {
     OptionConnection connection;
 
-    uint32_t worker_threads{ 0 }; // Worker threads (0 = 힘닿는데까지쥐어짜용)
+    uint32_t worker_threads{ 0 }; // Worker threads (0 = 힘닿는데까지쥐어짜용 💦)
     string log_level{ "error" };
     // uint16_t metrics_port{ 0 }; // metric port (Grafana) (0: 비활성화)
   };
 
+  /**
+   * ## Security structs
+   *
+   */
   struct SecurityTCP
   {
     uint32_t connection_limits{ 100000 };
-    uint32_t connection_ip_limits{ 100 }; // 각 IP - 연결 제한
+    uint32_t connection_ip_limits{ 100 }; // 연결 제한 / IP
   };
 
   struct SecurityUDP
   {
     uint32_t connection_limits{ 50000 }; // 정확히 표현하자면: session_limits
-    uint32_t pps_ip_limits{ 10000 };     // 각 IP - pps 제한 10kb
-    uint32_t bps_ip_limits{ 10485760 };  // 각 IP - bps 제한 10mb
+    uint32_t pps_ip_limits{ 10000 };     // pps 제한 10kb / IP
+    uint32_t bps_ip_limits{ 10485760 };  // bps 제한 10mb / IP
   };
 
   struct Security
@@ -75,13 +96,15 @@ namespace lite_through_proxy
     SecurityUDP udp;
   };
 
+  /**
+   * ## Performance structs
+   *
+   * > How to get OS default kernel buffer size?
+   *   - recv size: cat /proc/sys/net/core/rmem_default, cat /proc/sys/net/core/rmem_max, cat /proc/sys/net/ipv4/tcp_rmem
+   *   - send(write) size: cat /proc/sys/net/core/wmem_default, cat /proc/sys/net/core/wmem_max, cat /proc/sys/net/ipv4/tcp_wmem
+   */
   struct PerformanceKernelSocket
   {
-    /**
-     * @see 리눅스의 디폴트 kernel buffer 사이즈를 보려면 cat 해봐용
-     * recv: /proc/sys/net/core/rmem_default, /proc/sys/net/core/rmem_max,/proc/sys/net/ipv4/tcp_rmem
-     * send(write): /proc/sys/net/core/wmem_default, /proc/sys/net/core/wmem_max, /proc/sys/net/ipv4/tcp_wmem
-     */
     size_t recv_buffer_size{ 0 };
     size_t send_buffer_size{ 0 };
   };
@@ -92,6 +115,10 @@ namespace lite_through_proxy
     PerformanceKernelSocket kernel_socket;
   };
 
+  /**
+   * ## Config
+   *
+   */
   struct Config
   {
     vector<Route> routes;
@@ -107,12 +134,7 @@ namespace lite_through_proxy
     atomic<shared_ptr<Config>> m_current{ make_shared<Config>() };
     atomic<uint64_t> m_version{ 0 };
 
-    const regex m_regex_ipv4{ R"(^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$)" };
-    const regex m_regex_ipv6{ R"(^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|^::1$|^::$|^([0-9a-fA-F]{1,4}:)*::([0-9a-fA-F]{1,4}:)*[0-9a-fA-F]{1,4}$)" };
-    const regex m_regex_domain{ R"(^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$)" };
-
-    template <typename T>
-    void yaml_bind( T& target, const YAML::Node& node, const optional<T>& default_value = nullopt )
+    template <typename T> void yaml_bind( T& target, const YAML::Node& node, const optional<T>& default_value = nullopt )
     {
       if ( node && !node.IsNull() )
       {
@@ -120,10 +142,8 @@ namespace lite_through_proxy
         {
           target = node.as<T>();
           return;
-        }
-        catch ( const YAML::Exception& )
-        {
-        }
+        } catch ( const YAML::Exception& )
+        {}
       }
 
       if ( default_value.has_value() )
@@ -155,7 +175,6 @@ namespace lite_through_proxy
       return str.empty() || str.find_first_not_of( " \t\n\r" ) == string::npos;
     }
 
-    // [RFC-1035](https://www.rfc-editor.org/rfc/rfc1035.html)
     bool is_valid_hostname( const string& hostname )
     {
       if ( is_empty( hostname ) || hostname.length() > 253 )
@@ -165,9 +184,8 @@ namespace lite_through_proxy
 
       try
       {
-        return regex_match( hostname, m_regex_ipv4 ) || regex_match( hostname, m_regex_ipv6 ) || regex_match( hostname, m_regex_domain );
-      }
-      catch ( const regex_error& )
+        return regex_match( hostname, REGEXP_IPv4 ) || regex_match( hostname, REGEXP_IPv6 ) || regex_match( hostname, REGEXP_DOMAIN );
+      } catch ( const regex_error& )
       {
         return false;
       }
@@ -434,8 +452,7 @@ namespace lite_through_proxy
         m_version.store( old_version + 1 );
 
         return true;
-      }
-      catch ( const exception& )
+      } catch ( const exception& )
       {
         return false;
       }
@@ -452,4 +469,4 @@ namespace lite_through_proxy
     }
   };
 
-} // namespace lite_through_proxy
+} // namespace lite_passthrough_proxy
