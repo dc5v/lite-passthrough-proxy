@@ -11,6 +11,11 @@ using namespace std;
 
 namespace lite_passthrough_proxy
 {
+  /**
+   * RFC-1918
+   * @link https://www.rfc-editor.org/rfc/rfc1918.html#section-3
+   *
+   */
   class SecurityValidate
   {
   private:
@@ -101,7 +106,7 @@ namespace lite_passthrough_proxy
       }
       /**
        * ====
-       * Unknown address family
+       * Unknown ss_family
        * ====
        *
        */
@@ -113,5 +118,19 @@ namespace lite_passthrough_proxy
       return true;
     }
   };
+
+  static bool timing_attack( const void* a, const void* b, size_t len ) noexcept
+  {
+    const volatile uint8_t* pa = static_cast<const volatile uint8_t*>( a );
+    const volatile uint8_t* pb = static_cast<const volatile uint8_t*>( b );
+    volatile uint8_t result = 0;
+
+    for ( size_t i = 0; i < len; ++i )
+    {
+      result |= pa[i] ^ pb[i];
+    }
+
+    return result == 0;
+  }
 
 } // namespace lite_passthrough_proxy
