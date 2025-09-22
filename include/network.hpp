@@ -1,153 +1,222 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
+#include <cstring>
 #include <fcntl.h>
 #include <span>
 #include <sys/sendfile.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
-
+#include <unistd.h>
 #include "pool/mem_pool.hpp"
-#include "pool/pools.hpp"
 
 using namespace std;
 
-namespace lite_passthrough_proxy
+namespace LitePassthroughProxy
 {
-  /**
-   * Batch network I/O class for UDP
-   * 
-   */
-  template <size_t BATCH_SIZE = 256> class UdpBatchNetworkIO
+  namespace Network
   {
-  private:
-    static thread_local inline BatchBuffer m_batch_buffer;
-
-    struct alignas( 64 ) BatchBuffer
+    /**
+     * -----
+     * BatchIO
+     *
+     */
+    template <size_t BATCH_SIZE = 256> class BatchIO
     {
-      array<span<byte>, BATCH_SIZE> buffers;
-      array<sockaddr_storage, BATCH_SIZE> addresses;
-      array<socklen_t, BATCH_SIZE> address_lengths;
-      array<ssize_t, BATCH_SIZE> bytes_received_array;
-
-      BatchBuffer()
+    private:
+      struct alignas( 64 ) BatchBuffer
       {
+        array<mmsghdr, BATCH_SIZE> msgs;
+        array<iovec, BATCH_SIZE> iovecs; // 오버헤드를 줄이기위해 I/O Vectors 를 써용
+        array<sockaddr_storage, BATCH_SIZE> addrs;
+        array<span<byte>, BATCH_SIZE> buffers;
+        size_t active_count{ 0 };
+
+        BatchBuffer()
+        {
+          for ( size_t i = 0; i < BATCH_SIZE; ++i )
+          {
+            msgs[i].msg_hdr.msg_name = &addrs[i];
+            msgs[i].msg_hdr.msg_namelen = sizeof( sockaddr_storage );
+            msgs[i].msg_hdr.msg_iov = &iovecs[i];
+            msgs[i].msg_hdr.msg_iovlen = 1;
+            msgs[i].msg_hdr.msg_control = nullptr;
+            msgs[i].msg_hdr.msg_controllen = 0;
+            msgs[i].msg_hdr.msg_flags = 0;
+          }
+        }
+
+        ~BatchBuffer()
+        {
+          for ( size_t i = 0; i < active_count; ++i )
+          {
+            if ( !buffers[i].empty() )
+            {
+              packet_pool<>.release( buffers[i] );
+            }
+          }
+        }
+      };
+
+      thread_local static inline BatchBuffer m_batch;
+
+    public:
+      static int receive_batch( int fd ) noexcept
+      {
+        for ( size_t i = 0; i < m_batch.active_count; ++i )
+        {
+          if ( !m_batch.buffers[i].empty() )
+          {
+            packet_pool<>.release( m_batch.buffers[i] );
+            m_batch.buffers[i] = {};
+          }
+        }
+
+        size_t allocated = 0;
         for ( size_t i = 0; i < BATCH_SIZE; ++i )
         {
-          address_lengths[i] = sizeof( sockaddr_storage );
-          bytes_received_array[i] = 0;
+          m_batch.buffers[i] = packet_pool<>.acquire();
+          if ( m_batch.buffers[i].empty() )
+          {
+            break;
+          }
+
+          m_batch.iovecs[i].iov_base = m_batch.buffers[i].data();
+          m_batch.iovecs[i].iov_len = m_batch.buffers[i].size();
+          allocated++;
         }
+
+        if ( allocated == 0 )
+        {
+          return -1;
+        }
+
+        int count = recvmmsg( fd, m_batch.msgs.data(), allocated, MSG_DONTWAIT, nullptr );
+        m_batch.active_count = ( count > 0 ) ? count : 0;
+
+        return count;
       }
-    };
 
-  public:
-    static sockaddr_storage& gte_address( size_t i ) noexcept
-    {
-      return m_batch_buffer.addresses[i];
-    }
-
-    static size_t get_buffer_size( size_t i ) noexcept
-    {
-      return static_cast<size_t>( m_batch_buffer.bytes_received_array[i] );
-    }
-
-    static span<byte>& get_buffer( size_t i ) noexcept
-    {
-      return m_batch_buffer.buffers[i];
-    }
-
-    static int receive( int fd ) noexcept
-    {
-      int count = 0;
-
-      for ( size_t i = 0; i < BATCH_SIZE; ++i )
+      static int send_batch( int fd, int count ) noexcept
       {
-        m_batch_buffer.buffers[i] = PacketPool.acquire();
-
-        if ( m_batch_buffer.buffers[i].empty() )
+        if ( count <= 0 || count > static_cast<int>( BATCH_SIZE ) )
         {
           return 0;
         }
 
-        m_batch_buffer.address_lengths[i] = sizeof( sockaddr_storage );
+        return sendmmsg( fd, m_batch.msgs.data(), count, 0 );
+      }
 
-        ssize_t bytes = recvfrom( fd, m_batch_buffer.buffers[i].data(), m_batch_buffer.buffers[i].size(), MSG_DONTWAIT, reinterpret_cast<sockaddr*>( &m_batch_buffer.addresses[i] ), &m_batch_buffer.address_lengths[i] );
-
-        if ( bytes < 0 )
+      /**
+       * ---------------
+       * PREPARE BEFORE SEND
+       *
+       */
+      static bool prepare( size_t i, const void* data, size_t len, const sockaddr_storage* address ) noexcept
+      {
+        if ( i >= BATCH_SIZE )
         {
-          if ( errno == EAGAIN || errno == EWOULDBLOCK )
-          {
-            PacketPool.release( m_batch_buffer.buffers[i] );
-            return count;
-          }
-
-          PacketPool.release( m_batch_buffer.buffers[i] );
-          return -1;
+          return false;
         }
 
-        m_batch_buffer.bytes_received_array[i] = bytes;
-        ++count;
-      }
-
-      return count;
-    }
-
-
-    static int send( int fd, int count ) noexcept
-    {
-      int sent_count = 0;
-
-      for ( int i = 0; i < count; ++i )
-      {
-
-        ssize_t bytes = sendto( fd, m_batch_buffer.buffers[i].data(), m_batch_buffer.bytes_received_array[i], 0, reinterpret_cast<const sockaddr*>( &m_batch_buffer.addresses[i] ), m_batch_buffer.address_lengths[i] );
-
-        if ( bytes < 0 )
+        if ( m_batch.buffers[i].empty() )
         {
-          if ( errno == EAGAIN || errno == EWOULDBLOCK )
+          m_batch.buffers[i] = packet_pool<>.acquire();
+          if ( m_batch.buffers[i].empty() )
           {
-            return sent_count;
+            return false;
           }
-
-          return -1;
         }
 
-        ++sent_count;
+        size_t copy_len = min( len, m_batch.buffers[i].size() );
+        memcpy( m_batch.buffers[i].data(), data, copy_len );
+
+        m_batch.iovecs[i].iov_base = m_batch.buffers[i].data();
+        m_batch.iovecs[i].iov_len = copy_len;
+
+        if ( address )
+        {
+          m_batch.addrs[i] = *address;
+          m_batch.msgs[i].msg_hdr.msg_namelen = ( address->ss_family == AF_INET ) ? sizeof( sockaddr_in ) : sizeof( sockaddr_in6 );
+        }
+
+        return true;
       }
 
-      return sent_count;
-    }
-
-
-    static void released( int count ) noexcept
-    {
-      for ( int i = 0; i < count; ++i )
+      /**
+       * ---------------
+       * RELEASE BUFFERS
+       *
+       */
+      static void release() noexcept
       {
-        PacketPool.release( m_batch_buffer.buffers[i] );
+        for ( size_t i = 0; i < m_batch.active_count; ++i )
+        {
+          if ( !m_batch.buffers[i].empty() )
+          {
+            packet_pool<>.release( m_batch.buffers[i] );
+            m_batch.buffers[i] = {};
+          }
+        }
+
+        m_batch.active_count = 0;
       }
-    }
 
+      /**
+       * ---------------
+       * GETTTERS
+       *
+       */
+      static mmsghdr& get_msg( size_t idx ) noexcept
+      {
+        return m_batch.msgs[idx];
+      }
 
-    static void prepare( size_t i, const sockaddr_storage& dest_address, socklen_t dest_len ) noexcept
+      static sockaddr_storage& get_addr( size_t idx ) noexcept
+      {
+        return m_batch.addrs[idx];
+      }
+
+      static span<byte> get_buffer( size_t idx ) noexcept
+      {
+        return m_batch.buffers[idx];
+      }
+
+      static size_t get_received_bytes( size_t idx ) noexcept
+      {
+        return m_batch.msgs[idx].msg_len;
+      }
+
+      static size_t get_active_count() noexcept
+      {
+        return m_batch.active_count;
+      }
+    };
+
+    /**
+     * ---------------
+     * Zerocopy Utils
+     *
+     */
+    class ZeroCopyTransfer
     {
-      m_batch_buffer.addresses[i] = dest_address;
-      m_batch_buffer.address_lengths[i] = dest_len;
-    }
-  };
+    public:
+      static ssize_t splice_data( int from_fd, int to_fd, size_t len = 65536 ) noexcept
+      {
+        return splice( from_fd, nullptr, to_fd, nullptr, len, SPLICE_F_MOVE | SPLICE_F_MORE | SPLICE_F_NONBLOCK );
+      }
 
+      static ssize_t sendfile_data( int out_fd, int in_fd, size_t count ) noexcept
+      {
+        return sendfile( out_fd, in_fd, nullptr, count );
+      }
 
-  class PassThroughTransfer
-  {
-  public:
-    static ssize_t splice_data( int from_fd, int to_fd, size_t len = 65536 ) noexcept
-    {
-      return splice( from_fd, nullptr, to_fd, nullptr, len, SPLICE_F_MOVE | SPLICE_F_MORE | SPLICE_F_NONBLOCK );
-    }
+      static ssize_t vmsplice_data( int fd, const iovec* iov, size_t nr_segs ) noexcept
+      {
+        return vmsplice( fd, iov, nr_segs, SPLICE_F_GIFT | SPLICE_F_NONBLOCK );
+      }
+    };
+  } // namespace Network
 
-    static ssize_t sendfile_data( int out_fd, int in_fd, size_t count ) noexcept
-    {
-      return sendfile( out_fd, in_fd, nullptr, count );
-    }
-  };
-
-} // namespace lite_passthrough_proxy
+} // namespace LitePassthroughProxy
